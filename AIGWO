@@ -1,0 +1,274 @@
+# -*- enconding: utf-8 -*-
+# @ModuleName: AIGWO
+# @Time: 2021/6/17 14:00
+import random
+import numpy as np
+import joblib
+import pandas as pd
+from gwo import gwo
+import numpy as np
+from deepforest import CascadeForestRegressor
+from sko.PSO import PSO
+from sko.GA import GA
+from sko.DE import DE
+import matplotlib.pyplot as plt
+
+N_STATES = 4  #apha:0,beta:1,delta:2,gamma:3
+ACTIONS = ['Rough exploration','Fine exploration',
+           'Slow convergence','Fast convergence']  #The action
+EPSILON = 0.9
+ALPHA = 0.1
+LAMBDA = 0.9
+
+
+###builid the Q table
+def build_q_table(n_states,actions):
+    table = pd.DataFrame(
+        np.zeros((n_states,len(ACTIONS))),
+        columns=actions,
+    )
+    print(table)
+    return table
+
+def choose_action(state,q_table):
+    state_actions = q_table.iloc[state,:]
+    if (np.random.uniform()>EPSILON) or (state_actions.all()==0):
+        action_name = np.random.choice(ACTIONS)
+    else:
+        action_name = state_actions.idxmax()
+    return action_name
+
+def rlgwo(obj_func,obj_funone,obj_funtwo,limit1,limit2,SearchAgents,Max_iteration,dim,lb,ub,verbose=True):
+    '''
+    :param obj_func: objective function
+    :param SearchAgents: num of wolve
+    :param Max_iteration: num of iteration
+    :param dim: num of variables
+    :param lb:  low boundary
+    :param ub:  up boundary
+    :param verbose: a display of processing
+    :return: gbest_history
+    '''
+
+    obj_func = obj_func
+    SearchAgents_no = SearchAgents
+    Max_iteration = Max_iteration
+    dim = dim
+    lb = lb
+    ub = ub
+    limit1 = limit1
+    limit2 = limit2
+
+    # initialize alpha, beta, and delta_pos初始化这3种狼
+    #初始化Alpha狼的位置
+    Alpha_pos = np.zeros(dim)
+    #初始化Alpha狼的目标函数值，change this to （-inf） for maximization problems
+    Alpha_score = float("inf")
+
+    Beta_pos = np.zeros(dim)
+    Beta_score = float("inf")
+
+    Delta_pos = np.zeros(dim)
+    Delta_score = float("inf")
+
+    Worst_score = -float('inf')
+
+    #Initialize the positions of search agents
+    # Positions =np.repeat(X[132,:], repeats=SearchAgents_no, axis=0).reshape(SearchAgents_no,-1)
+    np.random.seed(0)
+    Positions = np.zeros([SearchAgents_no,dim])
+    for i in range(dim):
+        Positions[:, i] = np.random.uniform(0,1, SearchAgents_no) * (ub[i] - lb[i]) + lb[i]
+    #     Positions[:, i] = np.ones(SearchAgents_no)*0.5 * (ub[i] - lb[i]) + lb[i] #ni
+    #     Positions[:, i] = np.ones(SearchAgents_no) * 0.4 * (ub[i] - lb[i]) + lb[i]  # hood
+    # Positions = np.ones([SearchAgents_no,dim])*0.3
+
+    Convergence_curve=np.zeros(Max_iteration)
+
+    #build the Q table
+    q_table = build_q_table(N_STATES,ACTIONS)
+
+    for m in range(0, Max_iteration):
+        for i in range(0, SearchAgents_no):
+            # Return back the search agents that go beyond the boundaries of the search space
+            #若搜索位置超过了搜索空间，需要重新回到搜索空间
+            for j in range(dim):
+                #clip这个函数将将数组中的元素限制在a_min, a_max之间，
+                #大于a_max的就使得它等于 a_max，小于a_min,的就使得它等于a_min。
+                Positions[i, j] = np.clip(Positions[i, j], lb[j], ub[j])
+
+            fitness = obj_func(Positions[i,:])
+            constrain1 = obj_funone(Positions[i, :])
+            constrain2 = obj_funtwo(Positions[i, :])
+            if constrain1 > limit1 and constrain2 > limit2:
+                pass
+            else:
+                Positions[i, :] = Positions[i - 1, :]
+            # s_number=s_obj_func(Positions[i,:])
+            # if s_number>5:
+            #     Positions[i, :]=Positions[i-1,:]
+            # Update Alpha, Beta, and Delta
+            if fitness < Alpha_score:
+                Alpha_score = fitness  # Update alpha
+                Alpha_pos = Positions[i, :].copy()
+
+            if (fitness > Alpha_score and fitness < Beta_score):
+                Beta_score = fitness  # Update beta
+                Beta_pos = Positions[i, :].copy()
+
+            if (fitness > Alpha_score and fitness > Beta_score and fitness < Delta_score):
+                Delta_score = fitness  # Update delta
+                Delta_pos = Positions[i, :].copy()
+
+            if fitness > Worst_score:
+                Worst_score = fitness
+
+            # print(Alpha_score)
+        updown_limit = Worst_score-Alpha_score
+        # a = 2 - m * ((2) / Max_iteration)  # a decreases linearly fron 2 to 0
+
+        # Update the Position of search agents including omegas更新
+        for i in range(0, SearchAgents_no):
+            ###judge the state
+            fitness_previous = obj_func(Positions[i,:])
+            # print(fitness_previous)
+            if fitness_previous == Alpha_score:
+                S = 0
+                print('choose state0')
+            elif fitness_previous == Beta_score:
+                S = 1
+                print('choose state1')
+            elif fitness_previous == Delta_score:
+                S = 2
+                print('choose state2')
+            else:
+                S = 3
+                print('choose state3')
+            # if (fitness_previous-Alpha_score)<0.25*updown_limit:
+            #     S = 0
+            #     print('choose state0')
+            # elif (fitness_previous-Alpha_score)>0.25*updown_limit and (fitness_previous-Alpha_score)<0.5*updown_limit:
+            #     S = 1
+            #     print('choose state1')
+            # elif (fitness_previous-Alpha_score)>0.5*updown_limit and (fitness_previous-Alpha_score)<0.75*updown_limit:
+            #     S = 2
+            #     print('choose state2')
+            # else:
+            #     S = 3
+            #     print('choose state3')
+
+            ### choose action from state
+            A = choose_action(S,q_table)
+            if A == 'Rough exploration':
+                a = random.uniform(1.5,2)
+                r1 = random.uniform(0.8,1)
+                r2 = random.uniform(0.8,1)
+            elif A == 'Fine exploration':
+                a = random.uniform(1,1.5)
+                r1 = random.uniform(0.6,0.8)
+                r2 = random.uniform(0.6,0.8)
+            elif A == 'Slow convergence':
+                a = random.uniform(0.5,1)
+                r1 = random.uniform(0.4,0.6)
+                r2 = random.uniform(0.4,0.6)
+            else:
+                a = random.uniform(0.1,0.5)
+                r1 = random.uniform(0.09,0.4)
+                r2 = random.uniform(0.09,0.4)
+
+
+            for j in range(0, dim):
+                # r1 = random.random()  # r1 is a random number in [0,1]
+                # r2 = random.random()  # r2 is a random number in [0,1]
+                A1 = 2 * a * r1 - a  # Equation (3.3)
+                C1 = 2 * r2 # Equation (3.4)
+
+                D_alpha = abs(C1 * Alpha_pos[j] - Positions[i, j]) # Equation (3.5)-part 1
+                X1 = Alpha_pos[j] - A1 * D_alpha# Equation (3.6)-part 1
+
+                # r1 = random.random()
+                # r2 = random.random()
+
+                A2 = 2 * a * r1 - a# Equation (3.3)
+                C2 = 2 * r2# Equation (3.4)
+
+                D_beta = abs(C2 * Beta_pos[j] - Positions[i, j]) # Equation (3.5)-part 2
+                X2 = Beta_pos[j] - A2 * D_beta # Equation (3.6)-part 2
+
+                # r1 = random.random()
+                # r2 = random.random()
+
+                A3 = 2 * a * r1 - a# Equation (3.3)
+                C3 = 2 * r2 # Equation (3.4)
+
+                D_delta = abs(C3 * Delta_pos[j] - Positions[i, j]) # Equation (3.5)-part 3
+                X3 = Delta_pos[j] - A3 * D_delta # Equation (3.5)-part 3
+
+                Positions[i, j] = (X1 + X2 + X3) / 3  # Equation (3.7)
+            ### update the Q table
+            fitness_update = obj_func(Positions[i,:])
+            if fitness_update < fitness_previous:
+                R = 1
+            else:
+                R = -0.2
+            q_predict = q_table.loc[S, A]
+            q_target = R
+            q_table.loc[S, A] += ALPHA * (q_target - q_predict)  # update
+
+        Convergence_curve[m] = Alpha_score
+
+        if verbose:
+            print(['At iteration ' + str(m) + ' the best fitness is ' + str(Alpha_score)])
+    return Convergence_curve
+
+# variable range
+def cal_range(data):
+    '''
+    :param data: type of DataFrame
+    :return:  max list and min list
+    '''
+    up_limit = data.max().to_list()
+    down_limit = data.min().to_list()
+    return up_limit,down_limit
+
+model_mass = CascadeForestRegressor(verbose=-1)
+model_mass.load('./carriagemass')
+model_torsion = CascadeForestRegressor(verbose=-1)
+model_torsion.load('./carriagetorsion')
+model_mode = CascadeForestRegressor(verbose=-1)
+model_mode.load('./carriagemode')
+
+# objective fuction
+def fun(X):
+    '''
+    :param X: decison variable
+    :return: fitness value
+    '''
+    x = np.array(X).reshape(1,-1)
+    fitness = model_mass.predict(x)[0][0]
+    return fitness
+
+def obj_funone(X):
+    x = np.array(X).reshape(1, -1)
+    torsion = model_torsion.predict(x)[0][0]
+    return torsion
+
+def obj_funtwo(X):
+    x = np.array(X).reshape(1, -1)
+    mode = model_mode.predict(x)[0][0]
+    return mode
+
+
+
+# parameters
+dim = 77
+data = pd.read_csv('./carriage.csv')
+ub,lb = cal_range(data)
+torsion_limit = lb[84]
+mode_limit = lb[86]
+ub = ub[0:dim]
+lb = lb[0:dim]
+
+###gwo
+gwo_hist = gwo(obj_func=fun,obj_funone=obj_funone,obj_funtwo=obj_funtwo,limit1=torsion_limit,limit2=mode_limit,
+               SearchAgents=150,Max_iteration=600,dim=dim,lb=lb,ub=ub)
